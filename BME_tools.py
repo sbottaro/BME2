@@ -1,21 +1,22 @@
 from sklearn.linear_model import LinearRegression
 import numpy as np
 import pandas as pd
+import csv
 
 exp_types = ["NOE","JCOUPLINGS","CS","SAXS","RDC"]
 bound_types = ["UPPER","LOWER"]
 averaging_types = ["linear","power_3","power_6","power_4"]
 fit_types = ["scale","scale+offset","no"]
 
-
+# calculate relative entropy
 def srel(w0,w1):
     idxs = np.where(w1>1.0E-50)
     return np.sum(w1[idxs]*np.log(w1[idxs]/w0[idxs]))
 
+# parse BME files
 def parse(exp_file,calc_file,averaging="auto"):
 
     log = ""
-    
     # read experimental data 
     fh = open(exp_file)
     first = fh.readline()
@@ -24,7 +25,6 @@ def parse(exp_file,calc_file,averaging="auto"):
     # read data type
     data_string = (first.split("DATA=")[-1].split()[0]).strip()
     assert data_string in exp_types , "Error. DATA in %s must be one of the following: %s " % (exp_file,exp_types)
-
 
     log += "# Reading %s data \n" % (data_string)
         
@@ -44,7 +44,7 @@ def parse(exp_file,calc_file,averaging="auto"):
     df_calc = pd.read_csv(calc_file,sep="\s+",header=None,comment="#")
     # Drop frame
     df_calc = df_calc.drop(columns=[0])
-    #print(df_calc)
+
     assert (df_calc.shape[1])==df_exp.shape[0],\
         "Error: Number of experimental data in %s (%d) must match the calculated data in %s (%d)" % (exp_file,df_exp.shape[0],calc_file,df_calc.shape[1])
 
@@ -87,46 +87,42 @@ def parse(exp_file,calc_file,averaging="auto"):
     labels = df_exp["label"].values
     exp = np.array(df_exp[["avg","sigma2","bound"]].values)
     calc = np.array(df_calc.values)
-    return labels,exp,calc,log
+    return labels,exp,calc,log,averaging
 
-    
+
+# perform a linear regression 
 def fit_and_scale(exp,calc,sample_weights,fit):
 
     assert fit in fit_types, "fit type must be in %s " % (fit_types)
 
-    log = "# Using %s scaling \n" % (fit)
-    # perform a linear fit 
     calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
+
+    log = "# Using %s scaling \n" % (fit)
+    if(fit=="no"): return calc_avg,log
+    
+    # perform a linear fit 
     exp_avg = exp[:,0].reshape(-1,1)
     oversigma = (1./exp[:,1]**2)
 
-    #print(calc_avg)
-    print(np.sqrt(np.average((calc_avg-exp_avg)**2)))
     if(fit=="scale"): 
         reg = LinearRegression(fit_intercept=False).fit(calc_avg,exp_avg,sample_weight=oversigma)
-
+        intercept = 0
         slope = reg.coef_[0]
-        calc *= slope
-        calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
-        score = reg.score(calc_avg,exp_avg,oversigma)
-        print(np.sqrt(np.average((calc_avg-exp_avg)**2)))
-        log += "# Slope=%8.4f; r2=%5.3f \n" % (slope,score)
-        
     elif(fit=="scale+offset"):
         reg = LinearRegression(fit_intercept=True).fit(calc_avg,exp_avg,sample_weight=oversigma)
         slope = reg.coef_[0][0]
         intercept = reg.intercept_[0]
-        calc *= slope
-        calc += intercept
+        
+    calc *= slope
+    calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
     
-        calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
-        print(np.sqrt(np.average((calc_avg-exp_avg)**2)))
-        score = reg.score(calc_avg,exp_avg,oversigma)
-        log = "# Slope=%8.4f; Offset=%8.4f; r2=%8.4f \n" % (slope,reg.intercept_[0],score)
+    score = reg.score(calc_avg,exp_avg,oversigma)
+    log = "# Slope=%8.4f; Offset=%8.4f; r2=%8.4f \n" % (slope,intercept,score)
         
     return calc_avg,log
 
 
+# remove some of the samples
 def subsample(label,exp,calc,use_samples,use_data):
     
     log = ""
@@ -141,6 +137,7 @@ def subsample(label,exp,calc,use_samples,use_data):
     
     return exp, calc,log
 
+# calculate chi2
 def calc_chi(exp,calc,sample_weights):
     
     calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
@@ -152,7 +149,7 @@ def calc_chi(exp,calc,sample_weights):
     diff *= ff #to_zero
     return  np.average((diff/exp[:,1])**2)
 
-    
+# sanity check 
 def check_data(label,exp,calc,sample_weights):
 
     calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
@@ -163,17 +160,23 @@ def check_data(label,exp,calc,sample_weights):
     ii = np.where(((diff<0) & (exp[:,2]<0)) | ((diff>0) & (exp[:,2]>0)) )[0]
     ff = [1 if (exp[j,2]==0) else 0 for j in range(exp.shape[0])]
     #to_zero = np.zeros(len(diff))
+    nviol = 0
     if(len(ii)>0):
         log += "# The ensemble violates the following %d boundaries: \n" % (len(ii))
         log += "# %14s %8s %8s \n" % ("label","exp_avg","calc_avg")
         for j in ii:
-            log  += "%15s %8.4f %8.4f \n" % (label[j],exp[j,0],calc_avg[j])
+            log  += "# %14s %8.4f %8.4f \n" % (label[j],exp[j,0],calc_avg[j])
             ff[j] = 1
+            nviol += 1
     diff *= ff #to_zero
     chi2 = np.average((diff/exp[:,1])**2)
+    rmsd = np.sqrt(np.average(diff**2))
+    ii_out =  np.where(diff>1.)[0]
+    nviol += len(ii_out)
     log += "CHI2: %.5f \n" % chi2
+    log += "RMSD: %.5f \n" % rmsd
+    log += "VIOLATIONS: %d \n" % nviol
 
-    
     m_min = np.min(calc,axis=0)
     m_max = np.max(calc,axis=0)
 
@@ -185,7 +188,7 @@ def check_data(label,exp,calc,sample_weights):
         log += "# The minimum value of the following data is higher than expt range: \n"
         log += "# %14s %8s %8s %8s \n" % ("label","exp_avg","exp_sigma","min_calc")
         for j in ii_min:
-            log += "%15s %8.4f %8.4f %8.4f\n" % (label[j],exp[j,0],exp[j,1],m_min[j])
+            log += "# %15s %8.4f %8.4f %8.4f\n" % (label[j],exp[j,0],exp[j,1],m_min[j])
 
     diff_max = ff*(exp[:,0]-m_max)/exp[:,1]
     ii_max = np.where(diff_max>1.)[0]
@@ -194,26 +197,117 @@ def check_data(label,exp,calc,sample_weights):
         log += "# The maximum value of the following data is lower than expt range: \n"
         log += "# %14s %8s %8s %8s \n" % ("label","exp_avg","exp_sigma","max_calc")
         for j in ii_max:
-            log += "%15s %8.4f %8.4f %8.4f\n" % (label[j],exp[j,0],exp[j,1],m_max[j])
-                
-                
-        
+            log += "# %15s %8.4f %8.4f %8.4f\n" % (label[j],exp[j,0],exp[j,1],m_max[j])
+                          
     return log
 
-def standardize(exp,calc,sample_weights,normalize="zscore"):
+
+# calculate Chi2, RMSD, number of violations
+def calc_diffs(exp_avg,exp_sigma,bounds,calc_avg):
+
+    diff = (calc_avg-exp_avg)/exp_sigma
+    # boundaries violations
+    ii = np.where(((diff<-1.) & (bounds<0)) | ((diff>1.) & (bounds>0)) )[0]
+    ff = [1 if (bounds[j]==0 or j in ii) else 0 for j in range(exp_avg.shape[0])]
+    # other violations
+    viol = np.where(((diff**2>1) & (bounds==0)) )[0]
+    #to_zero = np.zeros(len(diff))
+    viol_idx = np.array(list(ii)+list(viol))
+    nviol = viol_idx.shape[0]
+    diff *= ff #to_zero
+    chi2 = np.average((diff)**2)
+    rmsd = np.sqrt(np.average((diff*exp_sigma)**2))
+    return chi2,rmsd,nviol,viol_idx
     
+def calc_stats(label,exp,calc,sample_weights0,sample_weights1,averaging,fit,outfile):
+
+    
+    assert averaging in averaging_types, "averaging type must be in %s " % (averaging_types)
+    
+    calc_avg0 = np.sum(calc*sample_weights0[:,np.newaxis],axis=0).reshape(-1,1)
+    calc_avg1 = np.sum(calc*sample_weights1[:,np.newaxis],axis=0).reshape(-1,1)
+    exp_avg = exp[:,0].reshape(-1,1)
+    oversigma = (1./exp[:,1]**2)
+
+    intercept0,intercept1 = 0.,0.
+    slope0,slope1 = 1.,1.
+    
+    if(fit=="scale"):
+        reg0 = LinearRegression(fit_intercept=False).fit(calc_avg0,exp_avg,sample_weight=oversigma)
+        reg1 = LinearRegression(fit_intercept=False).fit(calc_avg1,exp_avg,sample_weight=oversigma)
+        slope0 = reg0.coef_[0]
+        slope1 = reg1.coef_[0]
+        
+    elif(fit=="scale+offset"):
+        reg0 = LinearRegression(fit_intercept=True).fit(calc_avg0,exp_avg,sample_weight=oversigma)
+        reg1 = LinearRegression(fit_intercept=True).fit(calc_avg1,exp_avg,sample_weight=oversigma)
+                
+        slope0 = reg0.coef_[0][0]
+        intercept0 = reg0.intercept_[0]
+        slope1 = reg1.coef_[0][0]
+        intercept1 = reg1.intercept_[0]
+
+    log = "# Slope=%8.4f/%8.4f; Offset=%8.4f/%8.4f \n" % (slope0,slope1,intercept0,intercept1)
+
+    if(averaging.split("_")[0]=="power"):
+        noe_power = int(averaging.split("_")[-1])
+
+        calc_avg0 = np.power(np.sum((slope0*calc-intercept0)*sample_weights0[:,np.newaxis],axis=0),-1/noe_power)
+        calc_avg1 = np.power(np.sum((slope1*calc-intercept1)*sample_weights1[:,np.newaxis],axis=0),-1/noe_power)
+        exp_avg = np.power(exp[:,0],-1/noe_power)
+        exp_sigma = (exp_avg*exp[:,1])/(noe_power*exp[:,0])
+        bounds = -exp[:,2]
+    else:
+        calc_avg0 = np.sum((slope0*calc-intercept0)*sample_weights0[:,np.newaxis],axis=0)
+        calc_avg1 = np.sum((slope1*calc-intercept1)*sample_weights1[:,np.newaxis],axis=0)
+
+        exp_avg = exp[:,0]
+        exp_sigma = exp[:,1]
+        bounds = exp[:,2]
+    log += "# %s averaging \n" % (averaging)
+        
+    
+    chi2_0,rmsd_0,nviol_0, viol_idx_0 = calc_diffs(exp_avg,exp_sigma,bounds,calc_avg0)
+    chi2_1,rmsd_1,nviol_1, viol_idx_1 = calc_diffs(exp_avg,exp_sigma,bounds,calc_avg1)
+
+    if(outfile!=None):
+        violation0 = [1 if k in viol_idx_0 else 0 for k in range(len(calc_avg0))]
+        violation1 = [1 if k in viol_idx_1 else 0 for k in range(len(calc_avg1))] 
+        violation = ["%d%d" % (i1,i2) for i1,i2 in zip(violation0,violation1)]
+        df = pd.DataFrame({'label': label, 'exp_avg': exp_avg,'exp_sigma':exp_sigma,\
+                           'calc_avg':calc_avg0,'calc_avg_rew':calc_avg1,"violation":violation})
+
+        with open(outfile, 'w') as fh:
+            fh.write('# %s \n' % " ".join(list(df.columns)))
+        df['label'] = df['label'].map(lambda x: '%-15s' % x)
+        df.to_csv(outfile,index=False,sep="\t",header=False,float_format="%8.4f",mode="a")
+        with open(outfile, 'a') as fh:
+            fh.write("# CHI2:       %8.4f %8.4f \n"  % (chi2_0,chi2_1))
+            fh.write("# RMSD:       %8.4f %8.4f \n"  % (rmsd_0,rmsd_1))
+            fh.write("# Violations: %8d %8d \n"  % (nviol_0,nviol_1))
+            fh.write("# ndata:      %8d %8d \n"  % (exp.shape[0],calc.shape[0]))
+
+    stats = [chi2_0,rmsd_0,nviol_0,chi2_1,rmsd_1,nviol_1]
+    print(log)
+    return stats
+
+def standardize(exp,calc,sample_weights,normalize="zscore"):
+
+    log = ""
+    #normalize="none"
     if(normalize=="zscore"):
         calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
-        std = np.sqrt(np.average((calc_avg-calc)**2, weights=sample_weights,axis=0))
+        #std = np.sqrt(np.average((calc_avg-calc)**2, weights=sample_weights,axis=0))
         #exp[:,0] = (exp[:,0]-calc_avg)/std # does not modify in-place
         #calc = (calc-calc_avg)/std
-        
+        std = exp[:,1] 
         exp[:,0] -= calc_avg
         exp[:,0] /= std
         calc -= calc_avg
         calc /= std
         exp[:,1] /= std
-        log = "# Z-score normalization \n"
+        #print(exp[:,0])
+        log += "# Z-score normalization \n"
         
     elif(normalize=="minmax"):
         mmin = calc.min(axis=0)
@@ -222,10 +316,10 @@ def standardize(exp,calc,sample_weights,normalize="zscore"):
         #exp[:,0] = (exp[:,0]-mmin)/delta
         #calc = (calc-mmin)/delta
         exp[:,0] -= mmin
-        exp[:,0] /= std
+        exp[:,0] /= delta
         calc -= mmin
         calc /= delta
         exp[:,1] /= delta
-        log = "# MinMax normalization \n"
-
+        log += "# MinMax normalization \n"
+        print(np.min(np.abs(delta)))
     return log
