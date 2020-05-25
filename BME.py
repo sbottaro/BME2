@@ -5,6 +5,7 @@ from scipy import optimize #version >0.13.0 for dogleg optimizer
 import sys
 import warnings
 import BME_tools as bt
+from scipy.special import logsumexp
 
 #warnings.simplefilter("error", "RuntimeWarning")
 #warnings.filterwarnings("error")
@@ -57,8 +58,11 @@ class Reweight:
         log  = bt.check_data(label,exp,calc,self.w0)
         self.log.write(log)
 
+        bt.standardize1(exp,calc,self.w0)
         log = bt.standardize(exp,calc,self.w0)
         self.log.write(log)
+
+        #
         
         return label,exp,calc
 
@@ -130,14 +134,25 @@ class Reweight:
         
         def maxent(lambdas):
             # weights
-            arg = -np.sum(lambdas[np.newaxis,:]*self.calculated,axis=1) - tmax
+            arg = -np.sum(lambdas[np.newaxis,:]*self.calculated,axis=1)-tmax+np.log(self.w0)
+            
+            logz = logsumexp(arg)
+            ww = np.exp(arg-logz)
+            #print(np.log(self.w0))
+            #exit()
             #arg -= tmax
             #########
-            ww = (self.w0*np.exp(arg))
-            zz = np.sum(ww)
-            assert np.isfinite(zz), "# Error. sum of weights is infinite. Use higher theta"
+            #print(" ".join(["%8.4f" % el for el in lambdas]))
+            #print(" ".join(["%8.4f" % el for el in arg]))
+            #ww = (self.w0*np.exp(arg))
+            #zz = np.sum(ww)
+
+            #zz1 = logsumexp(arg, b=self.w0)
+            #print(zz1,np.log(zz))
+            #assert np.isfinite(zz), "# Error. sum of weights is infinite. Use higher theta"
             
-            ww /= zz
+            #ww /= zz
+            
             avg = np.sum(ww[:,np.newaxis]*self.calculated, axis=0)
             
             # gaussian integral
@@ -145,7 +160,8 @@ class Reweight:
             
             # experimental value 
             sum1 = np.dot(lambdas,self.experiment[:,0])
-            fun = sum1 + eps2 + np.log(zz)
+            #fun = sum1 + eps2 + np.log(zz)
+            fun = sum1 + eps2 + logz
             
             # gradient
             #jac = self.experiment["avg"].values + lambdas*err - avg

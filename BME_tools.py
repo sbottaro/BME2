@@ -1,4 +1,5 @@
 from sklearn.linear_model import LinearRegression
+from scipy.stats import iqr
 import numpy as np
 import pandas as pd
 import csv
@@ -291,22 +292,94 @@ def calc_stats(label,exp,calc,sample_weights0,sample_weights1,averaging,fit,outf
     print(log)
     return stats
 
+def standardize1(exp,calc,sample_weights):
+
+    calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
+    std = np.sqrt(np.average((calc_avg-calc)**2, weights=sample_weights,axis=0))
+    exp_sigma = exp[:,1]
+    diff = calc-exp[:,0]
+    diffs = diff/exp[:,1]
+    mindiff = np.min(diff,axis=0)
+    mindiffs = np.min(calc,axis=0)
+    maxdiff = np.max(diff,axis=0)
+    maxdiffs = np.max(calc,axis=0)
+    avgdiffs = np.max(diffs,axis=0)
+    for j in range(len(calc_avg)):
+        print("%8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f" % (exp[j,0],exp[j,1],calc_avg[j],std[j],mindiff[j],mindiffs[j],maxdiff[j],maxdiffs[j],avgdiffs[j]))
+
+    print("###", np.max(np.sum(calc,axis=1)), np.min(np.sum(calc,axis=1)))
+
+    print("###")
+
+    exp_avg_1 = (exp[:,0]-calc_avg)/exp[:,1]
+    exp_sigma_1 = (exp[:,1])/exp[:,1]
+    calc_1 = (calc-calc_avg)/exp[:,1]
+    calc_avg_1 = np.sum(calc_1*sample_weights[:,np.newaxis],axis=0)
+    std_1 = np.sqrt(np.average((calc_avg_1-calc_1)**2, weights=sample_weights,axis=0))
+
+    diff = calc_1-exp_avg_1
+    diffs = diff/exp_sigma
+    mindiff = np.min(diff,axis=0)
+    mindiffs = np.min(calc_1,axis=0)
+    maxdiff = np.max(diff,axis=0)
+    maxdiffs = np.max(calc_1,axis=0)
+    avgdiffs = np.average(diffs,axis=0)
+    for j in range(len(calc_avg)):
+        print("%8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f" % (exp_avg_1[j],exp_sigma_1[j],calc_avg_1[j],std_1[j],mindiff[j],mindiffs[j],maxdiff[j],maxdiffs[j],avgdiffs[j]))
+    print("###", np.max(np.sum(calc_1,axis=1)), np.min(np.sum(calc_1,axis=1)))
+    print("###")
+
+    exp_avg_1 = (exp[:,0]-calc_avg)/std
+    exp_sigma_1 = (exp[:,1])/std
+    calc_1 = (calc-calc_avg)/std
+    calc_avg_1 = np.sum(calc_1*sample_weights[:,np.newaxis],axis=0)
+    std_1 = np.sqrt(np.average((calc_avg_1-calc_1)**2, weights=sample_weights,axis=0))
+
+    diff = calc_1-exp_avg_1
+    diffs = diff/exp_sigma
+    mindiff = np.min(diff,axis=0)
+    mindiffs = np.min(calc_1,axis=0)
+    maxdiff = np.max(diff,axis=0)
+    maxdiffs = np.max(calc_1,axis=0)
+    avgdiffs = np.average(diffs,axis=0)
+    for j in range(len(calc_avg)):
+        print("%8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f" % (exp_avg_1[j],exp_sigma_1[j],calc_avg_1[j],std_1[j],mindiff[j],mindiffs[j],maxdiff[j],maxdiffs[j],avgdiffs[j]))
+    print("###", np.max(np.sum(calc_1,axis=1)), np.min(np.sum(calc_1,axis=1)))
+
+    
 def standardize(exp,calc,sample_weights,normalize="zscore"):
 
     log = ""
     #normalize="none"
     if(normalize=="zscore"):
         calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
-        #std = np.sqrt(np.average((calc_avg-calc)**2, weights=sample_weights,axis=0))
+        #std = exp[:,1]
+        calc_var = np.average((calc_avg-calc)**2, weights=sample_weights,axis=0)
+        std = np.average(np.array([np.sqrt(calc_var),exp[:,1]]),axis=0)
+        #std = exp[:,1]
+        #std = np.sqrt(calc_var)
+        #mmin = calc.min(axis=0)
+        #mmax = calc.max(axis=0)
+        #delta = mmax-mmin
+
+        #rr = np.array([np.sqrt(calc_var),std,delta]).T
+        #np.savetxt("crap",rr)
+        #std = np.sqrt(calc_var+exp[:,1])
+        #q75, q50,q25 = np.percentile(calc, [75 ,50,25],axis=0)
+        #std = q75-q25
+        #calc_avg = q50
         #exp[:,0] = (exp[:,0]-calc_avg)/std # does not modify in-place
         #calc = (calc-calc_avg)/std
-        std = exp[:,1] 
+        #std = exp[:,1]
         exp[:,0] -= calc_avg
         exp[:,0] /= std
         calc -= calc_avg
         calc /= std
         exp[:,1] /= std
         #print(exp[:,0])
+        #gg = np.array([std,exp[:,0],exp[:,1]]).T
+
+
         log += "# Z-score normalization \n"
         
     elif(normalize=="minmax"):
@@ -321,5 +394,5 @@ def standardize(exp,calc,sample_weights,normalize="zscore"):
         calc /= delta
         exp[:,1] /= delta
         log += "# MinMax normalization \n"
-        print(np.min(np.abs(delta)))
+        #print(np.min(np.abs(delta)))
     return log
