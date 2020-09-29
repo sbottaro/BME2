@@ -1,30 +1,35 @@
 from __future__ import print_function
+
+import sys
 import time
 import numpy as np
-from scipy import optimize #version >0.13.0 for dogleg optimizer
-import sys
-import warnings
-import BME_tools as bt
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize #version >0.13.0 for dogleg optimizer
+from scipy.stats import linregress
 from scipy.special import logsumexp
-
-#warnings.simplefilter("error", "RuntimeWarning")
-#warnings.filterwarnings("error")
+from sklearn.linear_model import LinearRegression
+#import warnings
+import BME_tools as bt
+#import csv
 
 known_methods = ["BME","BER","CHI2_L2","CHI1_L1"]
+
 
 # reweight class. 
 class Reweight:
 
-    
     # initialize
     def __init__(self,name,w0=[]):
 
         self.name = name
 
-        if(len(w0)==0):
-            self.w0 = []
-        else:
+        if(len(w0)!=0):
+            print("NORMALIZE",self.name)
             self.w0 = w0/np.sum(w0)
+        else:
+            self.w0= []
+        
         self.w_opt = []
         self.lambdas = []
         
@@ -33,7 +38,7 @@ class Reweight:
         self.labels = []
         self.experiment =  []
         self.calculated =  []
-                        
+        self.standardized = False
         
     def read_file(self,exp_file,calc_file,averaging="auto",fit='no',use_samples=[],use_data=[]):
 
@@ -43,7 +48,7 @@ class Reweight:
         self.log.write(log)
         
         # remove datapoints if use_samples or use_data is not empty
-        exp, calc, log = bt.subsample(label,exp,calc,use_samples,use_data)
+        label,exp, calc, log = bt.subsample(label,exp,calc,use_samples,use_data)
         self.log.write(log)
 
         if(len(self.w0)==0):
@@ -57,12 +62,6 @@ class Reweight:
         # do sanity checks
         log  = bt.check_data(label,exp,calc,self.w0)
         self.log.write(log)
-
-        bt.standardize1(exp,calc,self.w0)
-        log = bt.standardize(exp,calc,self.w0)
-        self.log.write(log)
-
-        #
         
         return label,exp,calc
 
@@ -90,7 +89,9 @@ class Reweight:
             self.experiment = exp
             self.calculated = calc
             self.labels = label
-            self.w0 = np.ones(calc.shape[0])/calc.shape[0]
+            if(len(self.w0)==0):
+                print("NORMALIZE 2")
+                self.w0 = np.ones(calc.shape[0])/calc.shape[0]
             self.weights = np.ones(exp.shape[0])*weight
         else:
             self.experiment = np.vstack([self.experiment,exp])
@@ -105,17 +106,18 @@ class Reweight:
         self.log.write(log)
         
         # remove datapoints if use_samples or use_data is not empty
-        exp, calc, log = bt.subsample(label,exp,calc,use_samples,use_data)
+        label,exp, calc, log = bt.subsample(label,exp,calc,use_samples,use_data)
         self.log.write(log)
 
         # do sanity checks
-        stats  = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,fit=fit,outfile=outfile)
-
+        stats,log  = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,fit=fit,outfile=outfile)
+        self.log.write(log)
+        
         return stats
     
-    def predict_array(self,label,exp,calc,outfile=None):
-
-        return bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging="linear",outfile=outfile)
+    def predict_array(self,label,exp,calc,outfile=None,averaging="linear",fit="no"):
+        stats, log = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,outfile=outfile,fit=fit)
+        return stats
         
         # do sanity checks
         #log  = bt.check_data(label,exp,calc,self.w_opt)
@@ -123,12 +125,49 @@ class Reweight:
 
     def get_lambdas(self):
         return self.lambdas
+    
+    def get_iterations(self):
+        return self.niter
 
+    def get_nsamples(self):
+        return self.calculated.shape[0]
+
+    def get_ndata(self):
+        return self.experiment.shape[0]
+
+    def get_labels(self):
+        return self.labels
+    
+    def get_experiment(self):
+        return np.copy(self.experiment)
+    
+    def get_calculated(self):
+        return np.copy(self.calculated)
+
+    def get_name(self):
+        return self.name
+    
     def get_weights(self):
-        return self.w_opt
+        return np.copy(self.w_opt)
+    
+    def get_w0(self):
+        return np.copy(self.w0)
+
+    def set_lambdas(self,lambda0):
+        if(len(self.lambdas)==0):
+            self.lambdas = lambda0
+        else:
+            print("# Overrinding lambdas is not possible")
+            sys.exit(1)
+
 
     # optimize
     def fit(self,theta,lambdas_init=True,method="BME"):
+
+        if(self.standardized==False):
+            log,v1,v2 = bt.standardize(self.experiment,self.calculated,self.w0,normalize="zscore")
+            print("stanf")
+            self.standardized=True
 
         assert method in known_methods, "method %s not in known methods:" % (method,known_methods)
         
@@ -138,20 +177,6 @@ class Reweight:
             
             logz = logsumexp(arg)
             ww = np.exp(arg-logz)
-            #print(np.log(self.w0))
-            #exit()
-            #arg -= tmax
-            #########
-            #print(" ".join(["%8.4f" % el for el in lambdas]))
-            #print(" ".join(["%8.4f" % el for el in arg]))
-            #ww = (self.w0*np.exp(arg))
-            #zz = np.sum(ww)
-
-            #zz1 = logsumexp(arg, b=self.w0)
-            #print(zz1,np.log(zz))
-            #assert np.isfinite(zz), "# Error. sum of weights is infinite. Use higher theta"
-            
-            #ww /= zz
             
             avg = np.sum(ww[:,np.newaxis]*self.calculated, axis=0)
             
@@ -169,9 +194,8 @@ class Reweight:
             
 
             # divide by theta to avoid numerical problems
-            #print(fun)
             return  fun/theta,jac/theta
-            #return  fun,jac
+
     
         def maxent_hess(lambdas):
             arg = -np.sum(lambdas[np.newaxis,:]*self.calculated,axis=1) -tmax
@@ -279,14 +303,13 @@ class Reweight:
             start_time = time.time()
             #if(all(self.experiment[:,2]==0)):
             #    mini_method="trust-constr"
-            #    result = optimize.minimize(maxent,lambdas,\
+            #    result = minimize(maxent,lambdas,\
             #                               options=opt,method=mini_method,\
             #                               jac=True,hess=maxent_hess)
-#
-            #else:
-            result = optimize.minimize(maxent,lambdas,\
-                                       options=opt,method=mini_method,\
-                                       jac=True,bounds=bounds)
+            
+            result = minimize(maxent,lambdas,\
+                              options=opt,method=mini_method,\
+                              jac=True,bounds=bounds)
             self.log.write("Execution time: %.2f seconds\n" % (time.time() - start_time))
             
             if(result.success):
@@ -296,7 +319,7 @@ class Reweight:
                 w_opt /= np.sum(w_opt)
                 self.lambdas = np.copy(result.x)
                 self.w_opt = np.copy(w_opt)
-
+                self.niter = result.nit
                 chi2_after  = bt.calc_chi(self.experiment,self.calculated,w_opt)
                 phi = np.exp(-bt.srel(self.w0,w_opt))
                 
@@ -307,6 +330,7 @@ class Reweight:
             else:
                 self.log.write("Minimization using %s failed\n" % (mini_method))
                 self.log.write("Message: %s\n" % (result.message))
+                self.niter = -1
                 return np.NaN, np.NaN, np.NaN
             
             
@@ -325,8 +349,8 @@ class Reweight:
             w0 = np.copy(self.w0)
             start_time = time.time()
             #print(func_ber_gauss(w0))
-            #result = optimize.minimize(func_ber_gauss,w0,constraints=cons,options=opt,method=mini_method,bounds=bounds,jac=True)
-            result = optimize.minimize(func_ber_gauss,w0,constraints=cons,options=opt,method=mini_method,bounds=bounds,jac=False)
+            #result = minimize(func_ber_gauss,w0,constraints=cons,options=opt,method=mini_method,bounds=bounds,jac=True)
+            result = minimize(func_ber_gauss,w0,constraints=cons,options=opt,method=mini_method,bounds=bounds,jac=False)
             self.log.write("Execution time: %.2f seconds\n" % (time.time() - start_time))
             if(result.success):
                 self.log.write("Minimization using %s successful (iterations:%d)\n" % (mini_method,result.nit))
@@ -353,7 +377,7 @@ class Reweight:
             chi2_before  = bt.calc_chi(self.experiment,self.calculated,self.w0)
             self.log.write("CHI2 before optimization: %8.4f \n" % (chi2_before))
             start_time = time.time()
-            result = optimize.minimize(func_chi2_L2,self.w0,constraints=cons,options=opt,method=meth,jac=True,bounds=bounds)
+            result = minimize(func_chi2_L2,self.w0,constraints=cons,options=opt,method=meth,jac=True,bounds=bounds)
 
             w_opt = np.copy(result.x)
             self.w_opt = w_opt
@@ -372,7 +396,7 @@ class Reweight:
             chi2_before  = bt.calc_chi(self.experiment,self.calculated,self.w0)
             self.log.write("CHI2 before optimization: %8.4f \n" % (chi2_before))
             start_time = time.time()
-            result = optimize.minimize(func_chi2_L2,self.w0,constraints=cons,options=opt,method=meth,jac=True,bounds=bounds)
+            result = minimize(func_chi2_L2,self.w0,constraints=cons,options=opt,method=meth,jac=True,bounds=bounds)
 
             w_opt = np.copy(result.x)
             self.w_opt = w_opt
@@ -382,66 +406,129 @@ class Reweight:
             self.log.write("CHI2 after optimization: %8.4f \n" % (chi2_after))
 
 
+
     def theta_scan(self,thetas=[],train_fraction_data=0.75,nfold=5,train_fraction_samples=0.8):
 
         np.random.seed(42)
-        if(len(thetas)==0):
-            thetas = [1000,100,10,1]
+        if(len(thetas)==0): thetas = [10000,1000,100,10,1]
             
-        nsamples = self.calculated.shape[0]
-        ndata =   self.experiment.shape[0]
+        nsamples = self.get_nsamples()
+        ndata =   self.get_ndata()
+        #print(self.w0)
+        #exit()
         train_samples =  int(nsamples*train_fraction_samples)
         train_data =  int(ndata*train_fraction_data)
+        #w0 = self.get_w0()
+        #labels = self.get_labels()
 
-        fhx = open(self.name + ".xval.dat","w")
-        fhx.write("# %d fold cross-validation \n" % nfold)
-        fhx.write("# %f training fraction (data)\n" % train_fraction_data)
-        fhx.write("# %f training fraction (samples)\n" % train_fraction_samples)
-        fhx.write("# index theta chi2_0_train RMSD_0_train violations_0_train chi2_0_train RMSD_0_train violations_0_train chi2_0_test RMSD_0_test violations_0_test chi2_0_test RMSD_0_test violations_0_test \n")
-
-        results = np.zeros((nfold,len(thetas),13))
+        results = np.zeros((len(thetas),nfold,3))
         for i in range(nfold):
             shuffle_samples = np.arange(nsamples)
             shuffle_data = np.arange(ndata)
             np.random.shuffle(shuffle_samples)
             np.random.shuffle(shuffle_data)
-
+            
             train_idx_data = shuffle_data[:train_data]
             train_idx_samples = shuffle_samples[:train_samples]
             test_idx_data = shuffle_data[train_data:]
             test_idx_samples = shuffle_samples[:train_samples]  # test samples are the same as train!
-            
-            r1 = Reweight("theta_scan_%s_%d" % (self.name,i))
+        
+
             labels_train = [self.labels[k] for k in train_idx_data]
             labels_test = [self.labels[k] for k in test_idx_data]
             
-            exp_train = self.experiment[train_idx_data,:]
-            calc_train = self.calculated[:,train_idx_data]
-            
-            exp_test = self.experiment[test_idx_data,:]
-            calc_test = self.calculated[:,test_idx_data]
-            
-            r1.load_array(labels_train,exp_train,calc_train[train_idx_samples,:])
+            exp = self.get_experiment()
+            calc = self.get_calculated()
+            exp_train = exp[train_idx_data,:]
+            calc_train = calc[:,train_idx_data]
+        
+            exp_test = exp[test_idx_data,:]
+            calc_test = calc[:,test_idx_data]
+        
+            r1 = Reweight("crossval_%s_%d" % (self.name,i),w0=np.copy(self.w0[train_idx_samples]))        
+            r1.load_array(labels_train,np.copy(exp_train),np.copy(calc_train[train_idx_samples,:]))
+            l_init = True
+        
             for j,t in enumerate(thetas):
-                l_init = False
-                if(j==0):
-                    l_init=True
                 c1,c2,phi = r1.fit(t,lambdas_init=l_init)
-                train_stats = r1.predict_array(labels_train,exp_train,calc_train[train_idx_samples,:])
-                test_stats = r1.predict_array(labels_test,exp_test,calc_test[test_idx_samples,:]) + [phi]
-                train_string = ["%.3f" % x for x in train_stats]
-                test_string = ["%.3f" % x for x in test_stats] 
-                ss = "%d %.2f %s %s \n"  % (i,t," ".join(train_string)," ".join(test_string))
-                fhx.write(ss)
-                results[i,j,:6] = train_stats
-                results[i,j,6:] = test_stats
-                
-            fhx.write("\n")
-            fhx.write("\n")
+                l_init = False
+                fr = "crossval_%s_t%.2f_f%d" % (self.name,t,i)
+                train_stats = r1.predict_array(labels_train,exp_train,calc_train[train_idx_samples,:],\
+                                           outfile="%s_train" % (fr))
+                test_stats = r1.predict_array(labels_test,exp_test,calc_test[test_idx_samples,:],
+                                          outfile="%s_test" % (fr))
+                #print("####",i,j)
+                #outfiles.append(fr)
+                results[j,i,0] = train_stats[3]/train_stats[0]
+                results[j,i,1] = test_stats[3]/test_stats[0]
+                results[j,i,2] = phi
+                print(thetas[j],i,results[j,i])
+                print("TRAIN",train_stats)
+                print("TEST",test_stats)
 
+        fig,ax = plt.subplots(1,1,figsize=(12,8))
+        for k in range(nfold):
+            plt.scatter(thetas,results[:,k,0],c='k',s=4)
+            plt.scatter(thetas,results[:,k,1],c='r',s=4)
+            plt.scatter(thetas,results[:,k,2],c='b',s=4)
 
-        for j,t in enumerate(thetas):
-            avgs = np.average(results[:,j,:],axis=0)
-            avgs_string = ["%.3f" % el  for el in avgs]
-            fhx.write("AVG %.2f %s \n"  % (t," ".join(avgs_string)))
+        avg_test_error = np.nanmean(results[:,:,1],axis=1)
+        avg_train_error = np.nanmean(results[:,:,0],axis=1)
+        avg_phi = np.nanmean(results[:,:,2],axis=1)
+        argmin = np.argmin(avg_test_error)
+        
+        print("MIN:",thetas[argmin],avg_test_error[argmin],avg_train_error[argmin],avg_phi[argmin])
+        plt.plot(thetas,avg_train_error,"-*",c='k',label="Training error")
+        plt.plot(thetas,avg_test_error,"-o",c='r',label="Test error")
+        plt.plot(thetas,avg_phi,"-o",c='b',label="Phi")
+        plt.legend()
+        if(np.max(results[:,:,1])<1.):
+            ax.set_ylim(0,1.1)
+        else:
+            ax.set_ylim(0,np.min([2,1.1*np.max(results[:,:,1])]))
+        ax.axhline(1,ls="--",color='0.4')
+        ax.set_xscale('log')
+        plt.savefig("crossval_%s.png" % self.name)
+        
+    def ibme(self,theta,iterations=20,lr_weights=True):
+        
+        current_weights = self.get_w0()
+        w0 = self.get_w0()
+        name = self.get_name()
+        labels = self.get_labels()
+        exp = self.get_experiment()
+        calc = self.get_calculated()
+        if(lr_weights==True):
+            inv_var = 1./exp[:,1]**2
+        else:
+            inv_var = np.ones(len(exp))
             
+        for it in range(iterations):
+            
+            calc_avg = np.sum(calc*current_weights[:,np.newaxis],axis=0)
+
+            model = LinearRegression()
+            model.fit(calc_avg.reshape(-1,1),exp[:,0],inv_var)
+            #alpha, beta, r_value, p_value, std_err = linregress(calc_avg,exp[:,0])
+            alpha = model.coef_[0] #Scale factor
+            beta = model.intercept_
+            calc = alpha*calc+beta
+            
+            r1 = Reweight("%s_ibme_%d" % (name,it),w0=np.copy(w0))
+            r1.load_array(labels,np.copy(exp),np.copy(calc))
+            rr= r1.fit(theta=theta)
+        
+            current_weights = np.copy(r1.get_weights())
+            print(it,alpha,beta,rr)
+            
+        df = pd.DataFrame(calc)
+        df.to_csv("calc_%d.dat" % it,sep=" ",header=False)
+
+        df = pd.DataFrame(current_weights)
+        df.to_csv("weights_%d.dat" % it,sep=" ",header=False)
+
+        calc_avg = np.sum(calc*current_weights[:,np.newaxis],axis=0)
+
+        df = pd.DataFrame(calc_avg)
+        df.to_csv("avg_%d.dat" % it,sep=" ",header=False)
+
