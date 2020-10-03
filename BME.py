@@ -15,7 +15,17 @@ import BME_tools as bt
 
 known_methods = ["BME","BER","CHI2_L2","CHI1_L1"]
 
+def progress(count, total, suffix=''):
+    total -= 1
+    bar_len = 60
+    filled_len = int(round(bar_len * count / float(total)))
 
+    percents = round(100.0 * count / float(total), 1)
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+
+    sys.stdout.write('[%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
+    sys.stdout.flush()
+    
 # reweight class. 
 class Reweight:
 
@@ -25,7 +35,6 @@ class Reweight:
         self.name = name
 
         if(len(w0)!=0):
-            print("NORMALIZE",self.name)
             self.w0 = w0/np.sum(w0)
         else:
             self.w0= []
@@ -90,7 +99,6 @@ class Reweight:
             self.calculated = calc
             self.labels = label
             if(len(self.w0)==0):
-                print("NORMALIZE 2")
                 self.w0 = np.ones(calc.shape[0])/calc.shape[0]
             self.weights = np.ones(exp.shape[0])*weight
         else:
@@ -166,7 +174,6 @@ class Reweight:
 
         if(self.standardized==False):
             log,v1,v2 = bt.standardize(self.experiment,self.calculated,self.w0,normalize="zscore")
-            print("stanf")
             self.standardized=True
 
         assert method in known_methods, "method %s not in known methods:" % (method,known_methods)
@@ -410,19 +417,19 @@ class Reweight:
     def theta_scan(self,thetas=[],train_fraction_data=0.75,nfold=5,train_fraction_samples=0.8):
 
         np.random.seed(42)
-        if(len(thetas)==0): thetas = [10000,1000,100,10,1]
-            
+        if(len(thetas)==0): thetas = np.geomspace(0.1,10000,10)
+        print("Performing %d-fold cross validation for %d theta values" % (nfold,len(thetas)))
         nsamples = self.get_nsamples()
         ndata =   self.get_ndata()
-        #print(self.w0)
-        #exit()
+        
         train_samples =  int(nsamples*train_fraction_samples)
         train_data =  int(ndata*train_fraction_data)
-        #w0 = self.get_w0()
-        #labels = self.get_labels()
 
         results = np.zeros((len(thetas),nfold,3))
         for i in range(nfold):
+            progress(i,nfold)
+            if(i==nfold-1):
+                print("\n")
             shuffle_samples = np.arange(nsamples)
             shuffle_data = np.arange(ndata)
             np.random.shuffle(shuffle_samples)
@@ -462,9 +469,6 @@ class Reweight:
                 results[j,i,0] = train_stats[3]/train_stats[0]
                 results[j,i,1] = test_stats[3]/test_stats[0]
                 results[j,i,2] = phi
-                print(thetas[j],i,results[j,i])
-                print("TRAIN",train_stats)
-                print("TEST",test_stats)
 
         fig,ax = plt.subplots(1,1,figsize=(12,8))
         for k in range(nfold):
@@ -477,7 +481,11 @@ class Reweight:
         avg_phi = np.nanmean(results[:,:,2],axis=1)
         argmin = np.argmin(avg_test_error)
         
-        print("MIN:",thetas[argmin],avg_test_error[argmin],avg_train_error[argmin],avg_phi[argmin])
+        print("Optimal theta: %.2f" % thetas[argmin])
+        print("Validation error reduction %.3f" % avg_test_error[argmin])
+        print("Training error reduction %.3f" % avg_train_error[argmin])
+        print("Fraction of effective frames  %.3f" % avg_phi[argmin])
+
         plt.plot(thetas,avg_train_error,"-*",c='k',label="Training error")
         plt.plot(thetas,avg_test_error,"-o",c='r',label="Test error")
         plt.plot(thetas,avg_phi,"-o",c='b',label="Phi")
@@ -486,11 +494,16 @@ class Reweight:
             ax.set_ylim(0,1.1)
         else:
             ax.set_ylim(0,np.min([2,1.1*np.max(results[:,:,1])]))
+        plt.scatter(thetas[argmin],avg_train_error[argmin],c='r')
         ax.axhline(1,ls="--",color='0.4')
         ax.set_xscale('log')
+        ax.set_xlabel("Theta")
         plt.savefig("crossval_%s.png" % self.name)
+
+        return thetas[argmin]
         
-    def ibme(self,theta,iterations=20,lr_weights=True):
+        
+    def ibme(self,theta,ftol=0.01,iterations=50,lr_weights=True,offset=True):
         
         current_weights = self.get_w0()
         w0 = self.get_w0()
@@ -498,17 +511,22 @@ class Reweight:
         labels = self.get_labels()
         exp = self.get_experiment()
         calc = self.get_calculated()
+        print("# iterative BME")
         if(lr_weights==True):
             inv_var = 1./exp[:,1]**2
         else:
             inv_var = np.ones(len(exp))
-            
+
+        log = ""
+        rr_old = np.NaN
+        #self.log.write("acascacasacas\n")
         for it in range(iterations):
             
             calc_avg = np.sum(calc*current_weights[:,np.newaxis],axis=0)
 
-            model = LinearRegression()
+            model = LinearRegression(fit_intercept=offset)
             model.fit(calc_avg.reshape(-1,1),exp[:,0],inv_var)
+
             #alpha, beta, r_value, p_value, std_err = linregress(calc_avg,exp[:,0])
             alpha = model.coef_[0] #Scale factor
             beta = model.intercept_
@@ -517,18 +535,35 @@ class Reweight:
             r1 = Reweight("%s_ibme_%d" % (name,it),w0=np.copy(w0))
             r1.load_array(labels,np.copy(exp),np.copy(calc))
             rr= r1.fit(theta=theta)
-        
-            current_weights = np.copy(r1.get_weights())
-            print(it,alpha,beta,rr)
+            if(it==0): chi2_0 = rr[0]
             
+                
+            current_weights = np.copy(r1.get_weights())
+
+            diff = rr_old-rr[1]
+            line = "Iteration:%3d scale: %7.4f offset: %7.4f chi2: %7.4f diff: %7.4e\n" % (it,alpha,beta,rr[1],diff)
+            rr_old = rr[1]
+            print(line,end="")
+            log += line
+            if(diff<ftol):
+                line = "Iterative procedure converged below tolerance %.2e after %d iterations\n" % (diff,it)
+                print(line,end="")
+                log += line
+                break
+            
+        self.log.write(log+ "\n")
+        self.log.close()
+        
+        n1 = "%s_%d.calc.dat" % (self.name,it)
+        n2 = "%s_%d.weights.dat" % (self.name,it)
+        
         df = pd.DataFrame(calc)
-        df.to_csv("calc_%d.dat" % it,sep=" ",header=False)
+        df.to_csv(n1,sep=" ",header=False)
 
         df = pd.DataFrame(current_weights)
-        df.to_csv("weights_%d.dat" % it,sep=" ",header=False)
-
-        calc_avg = np.sum(calc*current_weights[:,np.newaxis],axis=0)
-
-        df = pd.DataFrame(calc_avg)
-        df.to_csv("avg_%d.dat" % it,sep=" ",header=False)
+        df.to_csv(n2,sep=" ",header=False)
+        
+        print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
+        print("Done. Writing output files %s %s" % (n1,n2))
+        
 

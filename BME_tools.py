@@ -98,29 +98,28 @@ def fit_and_scale(exp,calc,sample_weights,fit):
 
     calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0)
     log = "# Using %s scaling \n" % (fit)
-    if(fit=="no"): return calc_avg,log
-    
-    # perform a linear fit 
-    exp_avg = exp[:,0]
-    slope,intercept,r_value = 1.,0.,0.
-    if(fit=="scale"): 
-        slope = np.dot(calc_avg,exp_avg)/np.dot(calc_avg,calc_avg)
-        print(slope)
-    elif(fit=="scale+offset"):
-        #slope, intercept, r_value, p_value, std_err = linregress(calc_avg[:,0],exp[:,0])
-        #print(calc_avg.reshape(-1,1).shape,exp_avg.reshape(-1,1).shape)
+    if(fit=="no"):
+        return calc_avg,log
+    else:
+        exp_avg = exp[:,0]
+
+        if(fit=="scale"):
+            fit_intercept=False
+        else:
+            fit_intercept=True
+
         oversigma = (1./exp[:,1]**2)
-        #oversigma = np.ones(len(exp))
-        reg = LinearRegression(fit_intercept=True).fit(calc_avg.reshape(-1,1),exp_avg.reshape(-1,1),sample_weight=oversigma)
+
+        reg = LinearRegression(fit_intercept=fit_intercept).fit(calc_avg.reshape(-1,1),exp_avg.reshape(-1,1),sample_weight=oversigma)
         r_value = reg.score(calc_avg.reshape(-1,1),exp_avg.reshape(-1,1),sample_weight=oversigma)
         slope,intercept = reg.coef_[0],reg.intercept_
-        
-    calc *=slope
-    calc +=intercept
+               
+        calc *=slope
+        calc +=intercept
 
-    calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
-    log = "# Slope=%8.4f; Offset=%8.4f; r2=%8.4f \n" % (slope,intercept,r_value)
-    return calc_avg,log
+        calc_avg = np.sum(calc*sample_weights[:,np.newaxis],axis=0).reshape(-1,1)
+        log = "# Slope=%8.4f; Offset=%8.4f; r2=%8.4f \n" % (slope,intercept,r_value)
+        return calc_avg,log
 
 
 # remove some of the samples
