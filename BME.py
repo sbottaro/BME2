@@ -565,5 +565,6 @@ class Reweight:
         
         print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
         print("Done. Writing output files %s %s" % (n1,n2))
-        
+        phi = np.exp(-bt.srel(w0,current_weights))
+        return chi2_0,rr[1],phi
 
