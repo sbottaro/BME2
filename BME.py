@@ -72,6 +72,7 @@ class Reweight:
         log  = bt.check_data(label,exp,calc,self.w0)
         self.log.write(log)
         
+
         return label,exp,calc
 
     def load(self,exp_file,calc_file,averaging="auto",fit='no',use_samples=[],use_data=[],weight=1):
@@ -306,6 +307,7 @@ class Reweight:
             chi2_before  = bt.calc_chi(self.experiment,self.calculated,self.w0)
             self.log.write("Optimizing %d data and %d samples. Theta=%f \n" % (self.experiment.shape[0],self.calculated.shape[0],theta))
             self.log.write("CHI2 before optimization: %8.4f \n" % (chi2_before))
+            self.log.flush()
             mini_method = "L-BFGS-B"
             start_time = time.time()
             #if(all(self.experiment[:,2]==0)):
@@ -332,12 +334,14 @@ class Reweight:
                 
                 self.log.write("CHI2 after optimization: %8.4f \n" % (chi2_after))
                 self.log.write("Fraction of effective frames: %8.4f \n" % (phi))
+                self.log.flush()
                 return chi2_before,chi2_after,phi
             
             else:
                 self.log.write("Minimization using %s failed\n" % (mini_method))
                 self.log.write("Message: %s\n" % (result.message))
                 self.niter = -1
+                self.log.flush()
                 return np.NaN, np.NaN, np.NaN
             
             
@@ -351,7 +355,7 @@ class Reweight:
             mini_method = "SLSQP"
             chi2_before  = bt.calc_chi(self.experiment,self.calculated,self.w0)
             self.log.write("CHI2 before optimization: %8.4f \n" % (chi2_before))
-
+            self.log.flush()
                                                                                                                                             
             w0 = np.copy(self.w0)
             start_time = time.time()
@@ -367,11 +371,13 @@ class Reweight:
                 phi = np.exp(-bt.srel(self.w0,w_opt))
                 self.log.write("CHI2 after optimization: %8.4f \n" % (chi2_after))
                 self.log.write("Fraction of effective frames: %8.4f \n" % (phi))
+                self.log.flush()
                 return chi2_before,chi2_after,phi
             
             else:
                 self.log.write("Minimization using %s failed\n" % (mini_method))
                 self.log.write("Message: %s\n" % (result.message))
+                self.log.flush()
                 return np.NaN, np.NaN, np.NaN
    
         # please check 
@@ -552,8 +558,8 @@ class Reweight:
                 break
             
         self.log.write(log+ "\n")
-        self.log.close()
-        
+        #self.log.close()
+        self.log.flush()
         n1 = "%s_%d.calc.dat" % (self.name,it)
         n2 = "%s_%d.weights.dat" % (self.name,it)
         
