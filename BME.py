@@ -127,7 +127,12 @@ class Reweight:
     def predict_array(self,label,exp,calc,outfile=None,averaging="linear",fit="no"):
         stats, log = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,outfile=outfile,fit=fit)
         return stats
-        
+
+    def scaled_predict_array(self,label,exp,calc,a,b, outfile=None,averaging="linear",fit="no"):
+        stats, log = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,outfile=outfile,fit=fit,a=a,b=b)
+        return stats
+
+
         # do sanity checks
         #log  = bt.check_data(label,exp,calc,self.w_opt)
         #self.log.write(log)
@@ -517,7 +522,7 @@ class Reweight:
         labels = self.get_labels()
         exp = self.get_experiment()
         calc = self.get_calculated()
-        print("# iterative BME")
+        #print("# iterative BME")
         if(lr_weights==True):
             inv_var = 1./exp[:,1]**2
         else:
@@ -542,18 +547,18 @@ class Reweight:
             r1.load_array(labels,np.copy(exp),np.copy(calc))
             rr= r1.fit(theta=theta)
             if(it==0): chi2_0 = rr[0]
-            
+            if(it==0): calc_0 = np.copy(calc)
                 
             current_weights = np.copy(r1.get_weights())
 
             diff = rr_old-rr[1]
             line = "Iteration:%3d scale: %7.4f offset: %7.4f chi2: %7.4f diff: %7.4e\n" % (it,alpha,beta,rr[1],diff)
             rr_old = rr[1]
-            print(line,end="")
+            #print(line,end="")
             log += line
             if(diff<ftol):
                 line = "Iterative procedure converged below tolerance %.2e after %d iterations\n" % (diff,it)
-                print(line,end="")
+                #print(line,end="")
                 log += line
                 break
             
@@ -569,8 +574,118 @@ class Reweight:
         df = pd.DataFrame(current_weights)
         df.to_csv(n2,sep=" ",header=False)
         
-        print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
-        print("Done. Writing output files %s %s" % (n1,n2))
+        #print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
+        #print("Done. Writing output files %s %s" % (n1,n2))
         phi = np.exp(-bt.srel(w0,current_weights))
-        return chi2_0,rr[1],phi
+        self.w_opt = current_weights
+        return chi2_0,rr[1],phi,calc_0,calc
+
+    def iterative_theta_scan(self,thetas=[],ftol=0.01,iterations=50,lr_weights=True,offset=True,
+                            train_fraction_data=0.75,nfold=5,train_fraction_samples=0.8):
+
+        np.random.seed(42)
+        if(len(thetas)==0): thetas = np.geomspace(0.1,10000,10)
+        print("Performing %d-fold cross validation for %d theta values" % (nfold,len(thetas)))
+        nsamples = self.get_nsamples()
+        ndata =   self.get_ndata()
+        
+        train_samples =  int(nsamples*train_fraction_samples)
+        train_data =  int(ndata*train_fraction_data)
+
+        results = np.zeros((len(thetas),nfold,3))
+        for i in range(nfold):
+            progress(i,nfold)
+            if(i==nfold-1):
+                print("\n")
+            shuffle_samples = np.arange(nsamples)
+            shuffle_data = np.arange(ndata)
+            np.random.shuffle(shuffle_samples)
+            np.random.shuffle(shuffle_data)
+            
+            train_idx_data = shuffle_data[:train_data]
+            train_idx_samples = shuffle_samples[:train_samples]
+            test_idx_data = shuffle_data[train_data:]
+            test_idx_samples = shuffle_samples[:train_samples]  # test samples are the same as train!
+        
+
+            #labels_train = [self.labels[k] for k in train_idx_data]
+            #labels_test = [self.labels[k] for k in test_idx_data]
+            
+            exp = self.get_experiment()
+            calc = self.get_calculated()
+            exp_train = exp[train_idx_data,:]
+            calc_train = calc[:,train_idx_data]
+        
+            exp_test = exp[test_idx_data,:]
+            calc_test = calc[:,test_idx_data]
+
+            r1 = Reweight("crossval_%s_%d" % (self.name,i),w0=np.copy(self.w0[train_idx_samples]))       
+            r1.load_array(train_idx_data,np.copy(exp_train),np.copy(calc_train[train_idx_samples,:]))
+        
+            for j,t in enumerate(thetas):
+                c1,c2,phi,calc_0,calc_1 = r1.ibme(t,ftol=ftol,iterations=iterations,
+                                    lr_weights=lr_weights,offset=offset)
+                
+                #calc = a*calc+b
+                #calc_train = calc[:,train_idx_data]
+                #calc_test = calc[:,test_idx_data]
+
+                l_init = False
+                fr = "crossval_%s_t%.2f_f%d" % (self.name,t,i)
+                chi_train_0 = bt.calc_chi(exp[train_idx_data],calc_0, r1.w0)
+                chi_train_1 = bt.calc_chi(exp[train_idx_data],calc_1, r1.w_opt)
+                #Because the alpha and beta parameters for the scaled observables are not kept in ibme,
+                #we fit the final calc arrays to obtain them.                
+                model = LinearRegression(fit_intercept=offset)
+                model.fit(calc_train[train_idx_samples,0].reshape(-1,1),calc_0[:,0])
+                # Initial values
+                alpha = model.coef_[0] #Scale factor
+                beta = model.intercept_
+                calc_test_0 = alpha*calc_test+beta
+                # Optimized values
+                model.fit(calc_train[train_idx_samples,0].reshape(-1,1),calc_1[:,0])
+                alpha = model.coef_[0] #Scale factor
+                beta = model.intercept_
+                calc_test_1 = alpha*calc_test+beta
+
+                chi_test_0 = bt.calc_chi(exp[test_idx_data],calc_test_0[test_idx_samples,:], r1.w0)
+                chi_test_1 = bt.calc_chi(exp[test_idx_data],calc_test_1[test_idx_samples,:], r1.w_opt)
+                #print("####",i,j)
+                #outfiles.append(fr)
+                results[j,i,0] = chi_train_1/chi_train_0
+                results[j,i,1] = chi_test_1/chi_test_0
+                results[j,i,2] = phi
+
+        fig,ax = plt.subplots(1,1,figsize=(12,8))
+        for k in range(nfold):
+            plt.scatter(thetas,results[:,k,0],c='k',s=4)
+            plt.scatter(thetas,results[:,k,1],c='r',s=4)
+            plt.scatter(thetas,results[:,k,2],c='b',s=4)
+
+        avg_test_error = np.nanmean(results[:,:,1],axis=1)
+        avg_train_error = np.nanmean(results[:,:,0],axis=1)
+        avg_phi = np.nanmean(results[:,:,2],axis=1)
+        argmin = np.argmin(avg_test_error)
+        
+        print("Optimal theta: %.2f" % thetas[argmin])
+        print("Validation error reduction %.3f" % avg_test_error[argmin])
+        print("Training error reduction %.3f" % avg_train_error[argmin])
+        print("Fraction of effective frames  %.3f" % avg_phi[argmin])
+
+        plt.plot(thetas,avg_train_error,"-*",c='k',label="Training error")
+        plt.plot(thetas,avg_test_error,"-o",c='r',label="Test error")
+        plt.plot(thetas,avg_phi,"-o",c='b',label="Phi")
+        plt.legend()
+        if(np.max(results[:,:,1])<1.):
+            ax.set_ylim(0,1.1)
+        else:
+            ax.set_ylim(0,np.min([2,1.1*np.max(results[:,:,1])]))
+        plt.scatter(thetas[argmin],avg_train_error[argmin],c='r')
+        ax.axhline(1,ls="--",color='0.4')
+        ax.set_xscale('log')
+        ax.set_xlabel("Theta")
+        plt.savefig("crossval_%s.png" % self.name)
+
+        return thetas[argmin]
+        
 
