@@ -128,10 +128,6 @@ class Reweight:
         stats, log = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,outfile=outfile,fit=fit)
         return stats
 
-    def scaled_predict_array(self,label,exp,calc,a,b, outfile=None,averaging="linear",fit="no"):
-        stats, log = bt.calc_stats(label,exp,calc,self.w0,self.w_opt,averaging=averaging,outfile=outfile,fit=fit,a=a,b=b)
-        return stats
-
 
         # do sanity checks
         #log  = bt.check_data(label,exp,calc,self.w_opt)
