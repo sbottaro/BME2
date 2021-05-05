@@ -167,7 +167,7 @@ class Reweight:
         if(len(self.lambdas)==0):
             self.lambdas = lambda0
         else:
-            print("# Overrinding lambdas is not possible")
+            print("# Overriding lambdas is not possible")
             sys.exit(1)
 
 
@@ -518,6 +518,10 @@ class Reweight:
         labels = self.get_labels()
         exp = self.get_experiment()
         calc = self.get_calculated()
+
+        self.ibme_weights = []
+        self.ibme_stats = []
+        
         #print("# iterative BME")
         if(lr_weights==True):
             inv_var = 1./exp[:,1]**2
@@ -552,9 +556,13 @@ class Reweight:
             rr_old = rr[1]
             #print(line,end="")
             log += line
+
+            self.ibme_weights.append(current_weights)
+            self.ibme_stats.append(rr)
+            
             if(diff<ftol):
                 line = "Iterative procedure converged below tolerance %.2e after %d iterations\n" % (diff,it)
-                #print(line,end="")
+                print(line,end="")
                 log += line
                 break
             
@@ -565,10 +573,10 @@ class Reweight:
         n2 = "%s_%d.weights.dat" % (self.name,it)
         
         df = pd.DataFrame(calc)
-        df.to_csv(n1,sep=" ",header=False)
+        df.to_csv(n1,sep=" ",header=False,float_format=%8.4e)
 
         df = pd.DataFrame(current_weights)
-        df.to_csv(n2,sep=" ",header=False)
+        df.to_csv(n2,sep=" ",header=False,float_format=%8.4e)
         
         #print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
         #print("Done. Writing output files %s %s" % (n1,n2))
@@ -576,6 +584,23 @@ class Reweight:
         self.w_opt = current_weights
         return chi2_0,rr[1],phi,calc_0,calc
 
+    def get_ibme_weights(self):
+
+        try:
+            return self.ibme_weights
+        except:
+            print("# iBME weights not available. Call iBME first")
+            sys.exit(1)
+
+    def get_ibme_stats(self):
+
+        try:
+            return self.ibme_stats
+        except:
+            print("# iBME stats not available. Call iBME first")
+            sys.exit(1)
+
+        
     def iterative_theta_scan(self,thetas=[],ftol=0.01,iterations=50,lr_weights=True,offset=True,
                             train_fraction_data=0.75,nfold=5,train_fraction_samples=0.8):
 
