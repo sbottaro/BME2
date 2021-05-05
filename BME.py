@@ -573,10 +573,10 @@ class Reweight:
         n2 = "%s_%d.weights.dat" % (self.name,it)
         
         df = pd.DataFrame(calc)
-        df.to_csv(n1,sep=" ",header=False,float_format=%8.4e)
+        df.to_csv(n1,sep=" ",header=False,float_format="%8.4e")
 
         df = pd.DataFrame(current_weights)
-        df.to_csv(n2,sep=" ",header=False,float_format=%8.4e)
+        df.to_csv(n2,sep=" ",header=False,float_format="%8.4e")
         
         #print("Done. Initial chi2: %8.4f Final chi2:%8.4f" % (chi2_0,rr[1]))
         #print("Done. Writing output files %s %s" % (n1,n2))
