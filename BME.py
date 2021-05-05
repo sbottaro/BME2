@@ -551,7 +551,7 @@ class Reweight:
                 
             current_weights = np.copy(r1.get_weights())
 
-            diff = rr_old-rr[1]
+            diff = abs(rr_old-rr[1])
             line = "Iteration:%3d scale: %7.4f offset: %7.4f chi2: %7.4f diff: %7.4e\n" % (it,alpha,beta,rr[1],diff)
             rr_old = rr[1]
             #print(line,end="")
